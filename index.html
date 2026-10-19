@@ -1,0 +1,491 @@
+<title>Hoa hồng 20/10</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap">
+<style>
+/* Layout: one full-screen pixel stage (low-res canvas scaled with hard edges); the message and two buttons float above it */
+:root{
+  --night:#100c26;      /* sky, page ground */
+  --plum:#2a1b4d;       /* button face */
+  --rose:#e8325a;       /* rose red, text shadow */
+  --blush:#ffa3c4;      /* message text */
+  --gold:#ffd166;       /* focus ring, sparks */
+  --milk:#fff4fb;       /* button text, outlines */
+  --font-pixel:"VT323","Courier New",ui-monospace,monospace;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--night);color:var(--milk);overflow:hidden;font-family:var(--font-pixel)}
+#stage{position:fixed;inset:0;display:grid;place-items:center;overflow:hidden;background:var(--night)}
+#c{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+
+#msg{position:fixed;left:0;right:0;top:calc(9vh + env(safe-area-inset-top,0px));text-align:center;pointer-events:none;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+#line{margin:0;font-weight:400;white-space:pre-line;text-wrap:balance;
+  font-size:clamp(44px,10vw,112px);line-height:.92;letter-spacing:.03em;color:var(--blush);
+  text-shadow:4px 4px 0 var(--rose),8px 8px 0 #3d1046}
+#line .cursor{display:inline-block;width:.45em;height:.12em;background:var(--blush);vertical-align:baseline;animation:blink .6s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+.controls{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));display:flex;gap:14px}
+button{font-family:var(--font-pixel);font-size:24px;line-height:1;background:var(--plum);color:var(--milk);border:0;padding:8px 14px 6px;cursor:pointer;
+  box-shadow:0 0 0 3px var(--milk),5px 5px 0 3px var(--rose)}
+button:hover{background:#3a2766}
+button:active{transform:translate(3px,3px);box-shadow:0 0 0 3px var(--milk),2px 2px 0 3px var(--rose)}
+button:focus-visible{outline:3px solid var(--gold);outline-offset:6px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+
+<div id="stage"><canvas id="c" aria-hidden="true"></canvas></div>
+<div id="msg"><h1 id="line" aria-hidden="true"></h1><p class="sr" id="srText"></p></div>
+<div class="controls">
+  <button id="sound" type="button" aria-pressed="false">Âm thanh: tắt</button>
+  <button id="replay" type="button" hidden>Xem lại</button>
+</div>
+
+<script>
+(() => {
+const MESSAGE = 'Chúc bae\n20/10 vui vẻ';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const lineEl = document.getElementById('line'), srEl = document.getElementById('srText');
+const replayBtn = document.getElementById('replay'), soundBtn = document.getElementById('sound');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// timeline (seconds)
+const T = { stemEnd:1.6, bloomStart:1.3, bloomEnd:5.6, fwStart:6.0, fwEnd:10.4, heart:10.8,
+            bunnyIn:12.4, bunnyStop:14.8, zoom:15.6, kiss:17.0, poof:17.9, text:18.5 };
+
+let W, H, PS, gy, bg, stars = [];
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const ease = u => 1 - Math.pow(1 - clamp(u), 3);
+const easeIO = u => { u = clamp(u); return u < .5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2; };
+
+// ---------- drawing primitives (logical pixels) ----------
+function rect(x, y, w, h, c, g = ctx) { g.fillStyle = c; g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
+function disc(cx, cy, r, c, g = ctx) {
+  g.fillStyle = c; const R = Math.max(0, r);
+  for (let dy = -Math.floor(R); dy <= Math.floor(R); dy++) {
+    const half = Math.floor(Math.sqrt(R * R - dy * dy));
+    g.fillRect(Math.round(cx) - half, Math.round(cy) + dy, half * 2 + 1, 1);
+  }
+}
+function sprite(rows, pal, sx, sy, s, ax = 0, ay = 0) {
+  for (let j = 0; j < rows.length; j++) for (let i = 0; i < rows[j].length; i++) {
+    const c = pal[rows[j][i]]; if (!c) continue;
+    cell(i, j, c, sx, sy, s, ax, ay);
+  }
+}
+function cell(i, j, c, sx, sy, s, ax, ay) {   // one sprite pixel at scale s, seamless for fractional s
+  const x0 = Math.round(sx + (i - ax) * s), x1 = Math.round(sx + (i + 1 - ax) * s);
+  const y0 = Math.round(sy + (j - ay) * s), y1 = Math.round(sy + (j + 1 - ay) * s);
+  ctx.fillStyle = c; ctx.fillRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+}
+
+// ---------- sprites ----------
+const BUNNY = [
+  "....kk......kk....",
+  "...kwpk....kwpk...",
+  "...kwpk....kwpk...",
+  "...kwpk....kwpk...",
+  "...kwpk....kwpk...",
+  "...kwwk....kwwk...",
+  "....kwk....kwk....",
+  "...kkwwkkkkkwwkk..",
+  "..kwwwwwwwwwwwwk..",
+  ".kwwwwwwwwwwwwwwk.",
+  ".kwwhewwwwwwhewwk.",
+  ".kwweewwwwwweewwk.",
+  ".kpwwwwwppwwwwwpk.",
+  "..kwwwwwkwkwwwwk..",
+  "...kkwwwwwwwwkk...",
+  "..kwwwwwwwwwwwwk..",
+  ".kwwwwwwwwwwwwwwk.",
+  ".kwwwwwwwwwwwwwwk.",
+  ".kwwwwwwwwwwwwwwk.",
+  ".kwwwwwwwwwwwwwwk.",
+  ".kgwwwwwwwwwwwwgk.",
+  "..kgwwwwwwwwwwgk..",
+  "..kkwwkkkkkkwwkk..",
+  "..kwwwk....kwwwk..",
+  "..kkkkk....kkkkk.."];
+const BUNNY_CLOSED = BUNNY.slice();
+BUNNY_CLOSED[10] = ".kwwwwwwwwwwwwwwk.";
+BUNNY_CLOSED[11] = ".kwwkkwwwwwwkkwwk.";
+const BUNNY_KISS = BUNNY_CLOSED.slice();
+BUNNY_KISS[13] = "..kwwwwwwrrwwwwk..";
+BUNNY_KISS[14] = "...kkwwwwrrwwkk...";
+const BPAL = { k:'#2a1d3f', w:'#fbf7ff', g:'#cfc6e0', p:'#ff8fb6', e:'#1a1226', h:'#ffffff', r:'#ff3d6e' };
+const PAW = [".kk.", "kwwk", "kwwk", ".kk."];
+
+const LIPS = [
+  "....RRR.RRR....",
+  "..RRpppRpppRR..",
+  ".RpphpppppppRR.",
+  "RpppppppppppppR",
+  "RmmmmmmmmmmmmmR",
+  ".RpppppppppppR.",
+  "..RpppphpppppR.",
+  "...RRpppppRR...",
+  ".....RRRRR....."];
+const LPAL = { R:'#b3123f', p:'#ff3d6e', m:'#7a0b2b', h:'#ffb3c8' };
+
+const HEART = [".RR.RR.", "RppRppR", "RpppppR", ".RpppR.", "..RpR..", "...R..."];
+const HPAL = { R:'#c2185b', p:'#ff6f9f' };
+
+// ---------- scene geometry ----------
+let cx, headY, roseR, bs;
+function resize() {
+  const vw = innerWidth, vh = innerHeight;
+  PS = Math.max(3, Math.round(Math.min(vw, vh) / 160));
+  W = Math.ceil(vw / PS); H = Math.ceil(vh / PS);
+  cv.width = W; cv.height = H; cv.style.width = W * PS + 'px'; cv.style.height = H * PS + 'px';
+  ctx.imageSmoothingEnabled = false;
+  gy = Math.round(H * 0.82);
+  cx = Math.round(W / 2);
+  roseR = Math.max(9, Math.min(W * 0.11, H * 0.09));
+  headY = Math.round(gy - clamp(Math.max(roseR * 4.5, H * 0.3), 0, H * 0.5));
+  bs = Math.max(1, Math.floor(Math.min(W, H) / 55));
+  buildBackground();
+}
+
+const SKY = ['#0b0820', '#110c2a', '#181135', '#211743', '#2b1c52', '#382361'];
+function skyAt(y) { return SKY[clamp(Math.floor(y / (gy / SKY.length)), 0, SKY.length - 1)]; }
+function buildBackground() {
+  bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+  const g = bg.getContext('2d');
+  const band = gy / SKY.length;
+  for (let y = 0; y < gy; y++) {
+    const k = Math.floor(y / band), f = y / band - k;
+    for (let x = 0; x < W; x++) {
+      // ordered dither at the band edges
+      const next = f > 0.82 && ((x + y) % 2 === 0) && k + 1 < SKY.length;
+      g.fillStyle = next ? SKY[k + 1] : SKY[Math.min(k, SKY.length - 1)];
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  // moon
+  const mx = Math.round(W * 0.84), my = Math.round(H * 0.14), mr = Math.max(4, Math.round(Math.min(W, H) * 0.045));
+  disc(mx, my, mr + 1, '#3d2f6b', g); disc(mx, my, mr, '#fff1c9', g); disc(mx + mr * 0.45, my - mr * 0.25, mr * 0.85, skyAt(my), g);
+  // ground
+  rect(0, gy, W, H - gy, '#14301f', g);
+  rect(0, gy, W, 1, '#3a8f57', g); rect(0, gy + 1, W, 1, '#2a6b42', g);
+  for (let x = 0; x < W; x++) {
+    if (Math.random() < 0.35) rect(x, gy - 1, 1, 1, '#3a8f57', g);
+    if (Math.random() < 0.08) rect(x, gy - 2, 1, 1, '#3a8f57', g);
+    if (Math.random() < 0.05) rect(x, gy + 3 + Math.floor(Math.random() * (H - gy - 4)), 1, 1, '#1d4029', g);
+  }
+  for (let i = 0; i < Math.round(W / 14); i++) {      // tiny meadow flowers
+    const x = Math.floor(rand(2, W - 2)), y = Math.floor(rand(gy + 3, H - 2));
+    if (Math.abs(x - cx) < roseR * 1.5) continue;
+    const col = Math.random() < .5 ? '#ff9cc0' : '#ffd166';
+    rect(x, y - 1, 1, 1, col, g); rect(x - 1, y, 1, 1, col, g); rect(x + 1, y, 1, 1, col, g); rect(x, y + 1, 1, 1, col, g); rect(x, y, 1, 1, '#fff4fb', g);
+  }
+  stars = [];
+  const n = Math.round(W * H / 260);
+  for (let i = 0; i < n; i++) stars.push({ x: Math.floor(rand(0, W)), y: Math.floor(rand(0, gy * 0.8)), ph: rand(0, 6.28), sp: rand(1, 3), big: Math.random() < 0.12 });
+}
+
+// ---------- rose ----------
+function drawRose(t) {
+  const stemU = ease(t / T.stemEnd);
+  const topY = gy - (gy - headY) * stemU;
+  // stem
+  for (let y = gy; y > topY; y--) { rect(cx - 1, y, 1, 1, '#2f8a4f'); rect(cx, y, 1, 1, '#1f5e36'); }
+  [[0.35, 1], [0.6, -1], [0.78, 1]].forEach(([f, dir], i) => {     // thorns
+    const y = gy - (gy - headY) * f; if (topY < y) rect(cx + (dir > 0 ? 1 : -2), y, 1, 1, '#174a2a');
+  });
+  // leaves
+  [[0.32, -1], [0.55, 1]].forEach(([f, dir]) => {
+    const y0 = gy - (gy - headY) * f, grow = ease((t - f * T.stemEnd) / 0.8);
+    if (grow <= 0) return;
+    const L = roseR * 1.4 * grow;
+    for (let i = 0; i <= L; i++) disc(cx + dir * i, y0 - i * 0.55, Math.sin(Math.PI * (i / Math.max(L, 1))) * roseR * 0.28 * grow + 0.5, '#2f8a4f');
+    for (let i = 1; i < L * 0.85; i++) rect(cx + dir * i, y0 - i * 0.55, 1, 1, '#1f5e36');
+  });
+  if (stemU < 0.98) { disc(cx, topY, 1.5, '#3a9c5c'); return; }
+  const b = ease((t - T.bloomStart) / (T.bloomEnd - T.bloomStart));
+  const R = roseR, hy = headY;
+  // sepals
+  for (const dir of [-1, 1]) for (let i = 0; i < R * (0.5 + 0.4 * b); i++) rect(cx + dir * i * (0.6 + 0.4 * b), hy + R * 0.25 + i * (0.5 - 0.35 * b), 1, 1, '#2f8a4f');
+  // outer petals
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / 5 + 0.35, d = R * 0.52 * b, pr = R * (0.34 + 0.27 * b);
+    const x = cx + Math.cos(a) * d, y = hy + Math.sin(a) * d * 0.82;
+    disc(x, y, pr + 1, '#7d1131');
+  }
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / 5 + 0.35, d = R * 0.52 * b, pr = R * (0.34 + 0.27 * b);
+    const x = cx + Math.cos(a) * d, y = hy + Math.sin(a) * d * 0.82;
+    disc(x, y, pr, '#cf2650'); disc(x - pr * 0.25, y - pr * 0.3, pr * 0.5, '#ec4d72');
+  }
+  // middle petals
+  const m = ease((b - 0.25) / 0.6);
+  for (let i = 0; i < 3; i++) {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / 3 + 1.1, d = R * 0.3 * m, pr = R * (0.24 + 0.16 * m);
+    const x = cx + Math.cos(a) * d, y = hy + Math.sin(a) * d * 0.82;
+    disc(x, y, pr + 1, '#8f1438'); disc(x, y, pr, '#e8325a'); disc(x - pr * .2, y - pr * .35, pr * .45, '#ff6b8b');
+  }
+  // heart of the rose: tight spiral
+  disc(cx, hy, R * (0.22 + 0.1 * b), '#a3173e');
+  for (let a = 0; a < Math.PI * 4; a += 0.18) {
+    const rr = 0.6 + a * R * 0.035 * (0.4 + b * 0.6);
+    rect(cx + Math.cos(a + t * 0.2) * rr, hy + Math.sin(a + t * 0.2) * rr * 0.85, 1, 1, '#5e0c26');
+  }
+  rect(cx, hy - 1, 1, 1, '#ff9cb5');
+  // sparkles when fully open
+  if (t > T.bloomEnd - 0.3 && t < T.fwStart + 1.5) {
+    for (let i = 0; i < 6; i++) {
+      const a = i * 1.047 + t * 0.6, rr = R * 1.5 + Math.sin(t * 3 + i) * 2;
+      if (Math.sin(t * 9 + i * 2) > 0.2) spark(cx + Math.cos(a) * rr, hy + Math.sin(a) * rr * 0.8, i % 2 ? '#ffd166' : '#fff4fb');
+    }
+  }
+}
+function spark(x, y, c) { rect(x, y, 1, 1, c); rect(x - 1, y, 1, 1, c); rect(x + 1, y, 1, 1, c); rect(x, y - 1, 1, 1, c); rect(x, y + 1, 1, 1, c); }
+
+// ---------- fireworks ----------
+const FW = ['#ffd166', '#ff5c8a', '#ffa3c4', '#b48cff', '#7ee0ff', '#fff4fb', '#ff8a3d'];
+let rockets = [], parts = [], puffs = [], hearts = [], nextLaunch, heartDone, kissDone, poofDone, bloomChimed, lastHop, typedShown;
+function launch(heart = false) {
+  const ox = cx + rand(-2, 2), oy = headY - roseR * 0.5;
+  const top = Math.max(H * 0.07, 6), bot = Math.max(top + 4, Math.min(headY - roseR * 2.2, H * 0.42));
+  rockets.push({ ox, oy, tx: heart ? cx : rand(W * 0.1, W * 0.9), ty: heart ? H * 0.26 : rand(top, bot),
+                 t0: tNow, dur: heart ? 1.0 : rand(0.6, 0.95), c: FW[Math.floor(rand(0, FW.length))], heart });
+  tone(260, 900, 0.35, 'triangle', 0.025);
+}
+function explode(x, y, c, heart) {
+  const c2 = FW[Math.floor(rand(0, FW.length))];
+  if (heart) {
+    for (let i = 0; i < 90; i++) {
+      const th = i / 90 * Math.PI * 2, hx = 16 * Math.pow(Math.sin(th), 3), hy = -(13 * Math.cos(th) - 5 * Math.cos(2 * th) - 2 * Math.cos(3 * th) - Math.cos(4 * th));
+      const k = H * 0.017;
+      parts.push({ x, y, vx: hx * k, vy: hy * k, life: 1.9, max: 1.9, c: i % 3 ? '#ff5c8a' : '#ffd166', g: 0.35 });
+    }
+  } else {
+    const n = 46, sp = H * rand(0.28, 0.4);
+    for (let i = 0; i < n; i++) {
+      const a = i / n * Math.PI * 2 + rand(-.08, .08), v = sp * rand(0.55, 1);
+      const L = rand(1.0, 1.6);
+      parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: L, max: L, c: i % 2 ? c : c2, g: 1 });
+    }
+  }
+  boom(heart ? 0.16 : 0.1);
+}
+function updateFireworks(dt) {
+  for (const r of rockets) {
+    const u = (tNow - r.t0) / r.dur;
+    if (u >= 1) { r.done = true; explode(r.tx, r.ty, r.c, r.heart); }
+  }
+  rockets = rockets.filter(r => !r.done);
+  const drag = Math.pow(0.3, dt), G = H * 0.2;
+  for (const p of parts) { p.vx *= drag; p.vy = p.vy * drag + G * p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+  parts = parts.filter(p => p.life > 0 && p.y < gy);
+}
+function drawFireworks() {
+  for (const r of rockets) {
+    for (let k = 5; k >= 0; k--) {
+      const u = ease((tNow - r.t0) / r.dur - k * 0.03);
+      if (u <= 0) continue;
+      rect(r.ox + (r.tx - r.ox) * u, r.oy + (r.ty - r.oy) * u, 1, 1, k === 0 ? '#fff4fb' : (k < 3 ? r.c : '#7a5a8f'));
+    }
+  }
+  for (const p of parts) {
+    const fade = p.life / p.max;
+    if (fade < 0.35 && Math.random() > fade / 0.35) continue;
+    const sz = fade > 0.75 ? 2 : 1;
+    rect(p.x, p.y, sz, sz, p.c);
+  }
+}
+
+// ---------- bunny ----------
+function carrotAndPaws(sx, sy, s, ax, ay) {
+  const A = [21, 10], B = [-5, 27], ABx = B[0] - A[0], ABy = B[1] - A[1], L2 = ABx * ABx + ABy * ABy, L = Math.sqrt(L2);
+  // leaves first (behind the carrot top)
+  const leaves = [[[21, 10], [26, 1]], [[21, 10], [29, 5]], [[21, 10], [20, 0]], [[22, 9], [31, 9]]];
+  for (const [[x0, y0], [x1, y1]] of leaves) {
+    const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0));
+    for (let i = 0; i <= n; i++) {
+      const x = Math.round(x0 + (x1 - x0) * i / n), y = Math.round(y0 + (y1 - y0) * i / n);
+      cell(x, y, '#3fbf6f', sx, sy, s, ax, ay); cell(x + 1, y, '#23804a', sx, sy, s, ax, ay);
+    }
+  }
+  for (let y = 3; y <= 30; y++) for (let x = -7; x <= 27; x++) {
+    const px = x + .5 - A[0], py = y + .5 - A[1];
+    let tt = (px * ABx + py * ABy) / L2;
+    const cross = (px * ABy - py * ABx) / L;
+    const d = Math.abs(cross);
+    const w = 5.4 * (1 - clamp(tt)) + 0.7;
+    let inside = tt >= 0 && tt <= 1 && d <= w;
+    if (tt < 0 && Math.hypot(px, py) <= 5.4 + 0.7) { inside = true; tt = 0; }
+    if (!inside) continue;
+    let c = '#ff8a2a';
+    if (d > w - 1.1) c = '#a8461a';
+    else if ((tt * 7) % 1 < 0.1 && d < w * 0.75) c = '#d8601f';
+    else if (cross > 0 && d < w * 0.4) c = '#ffb35c';
+    cell(x, y, c, sx, sy, s, ax, ay);
+  }
+  sprite(PAW, BPAL, sx, sy, s, ax - 3, ay - 16);
+  sprite(PAW, BPAL, sx, sy, s, ax - 11, ay - 12);
+}
+function drawBunny(face, sx, sy, s, ax, ay) {
+  sprite(face, BPAL, sx, sy, s, ax, ay);
+  carrotAndPaws(sx, sy, s, ax, ay);
+}
+function bunnyState(t) {
+  const standX = Math.max(10 * bs, cx - roseR * 2.4 - 6 * bs), startX = -24 * bs;
+  if (t < T.bunnyIn || t >= T.poof) return null;
+  if (t < T.bunnyStop) {
+    const u = (t - T.bunnyIn) / (T.bunnyStop - T.bunnyIn);
+    const x = startX + (standX - startX) * u;
+    const hopPh = u * 7 * Math.PI;
+    const hop = Math.abs(Math.sin(hopPh)) * 5 * bs;
+    const hopIdx = Math.floor(hopPh / Math.PI);
+    if (hopIdx !== lastHop) { lastHop = hopIdx; tone(520, 380, 0.06, 'square', 0.02); }
+    return { face: BUNNY, sx: x, sy: gy - hop, s: bs, ax: 9, ay: 25 };
+  }
+  if (t < T.zoom) {
+    const blink = (t > T.bunnyStop + 0.35 && t < T.bunnyStop + 0.5);
+    return { face: blink ? BUNNY_CLOSED : BUNNY, sx: standX, sy: gy, s: bs, ax: 9, ay: 25 };
+  }
+  // lean in toward the viewer: anchor on the face and scale up
+  const u = easeIO((t - T.zoom) / (T.kiss - T.zoom));
+  const fx0 = standX, fy0 = gy - 14 * bs;
+  const big = Math.min(W, H) / 13;
+  const s = bs + (big - bs) * u;
+  const wob = t > T.kiss ? Math.sin((t - T.kiss) * 30) * s * 0.15 * Math.max(0, 1 - (t - T.kiss) * 2) : 0;
+  return { face: u > 0.35 ? BUNNY_KISS : BUNNY_CLOSED, sx: fx0 + (W / 2 - fx0) * u + wob, sy: fy0 + (H * 0.52 - fy0) * u, s, ax: 9, ay: 11 };
+}
+function poof(x, y, s) {
+  for (let i = 0; i < 60; i++) {
+    const a = rand(0, Math.PI * 2), v = rand(H * 0.1, H * 0.45);
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rand(.6, 1.2), max: 1.2, c: Math.random() < .6 ? '#fbf7ff' : '#ffa3c4', g: 0.2 });
+  }
+  for (let i = 0; i < 9; i++) puffs.push({ x: x + rand(-6, 6) * s, y: y + rand(-6, 6) * s, r: rand(2, 4) * s * 0.6, t0: tNow });
+  boom(0.06);
+}
+
+// ---------- kiss mark, floating hearts ----------
+function drawKissMark(t) {
+  if (t < T.kiss) return;
+  const k = Math.max(2, Math.floor(Math.min(W, H) / 34));
+  const bounce = 1 + 0.6 * Math.max(0, 1 - (t - T.kiss) / 0.16);
+  const fade = 1 - clamp((t - (T.text + 1.2)) / 2.5);
+  if (fade <= 0) return;
+  ctx.globalAlpha = fade;
+  sprite(LIPS, LPAL, W / 2, H * 0.55, k * bounce, 7.5, 4.5);
+  ctx.globalAlpha = 1;
+}
+function drawFlash(t) {
+  const u = (t - T.kiss) / 0.35;
+  if (u < 0 || u > 1) return;
+  ctx.globalAlpha = 0.45 * (1 - u); rect(0, 0, W, H, '#ff9cc0'); ctx.globalAlpha = 1;
+}
+function updateHearts(dt, t) {
+  if (t > T.kiss && t < T.kiss + 0.05 && hearts.length < 14)
+    for (let i = 0; i < 14; i++) hearts.push({ x: W / 2 + rand(-W * .3, W * .3), y: H * 0.55 + rand(-10, 10), vy: -rand(H * .15, H * .3), ph: rand(0, 6), s: Math.max(1, bs - (Math.random() < .5 ? 1 : 0)) });
+  if (t > T.text && Math.random() < dt * 2.2)
+    hearts.push({ x: rand(4, W - 10), y: H + 6, vy: -rand(H * .06, H * .12), ph: rand(0, 6), s: Math.max(1, Math.round(bs * rand(.5, 1))) });
+  for (const h of hearts) h.y += h.vy * dt;
+  hearts = hearts.filter(h => h.y > -12);
+}
+function drawHearts(t) { for (const h of hearts) sprite(HEART, HPAL, h.x + Math.sin(t * 2 + h.ph) * 3, h.y, h.s, 3, 3); }
+
+// ---------- message ----------
+function showText(t) {
+  const chars = Array.from(MESSAGE);
+  const n = t < T.text ? 0 : Math.min(chars.length, Math.floor((t - T.text) / 0.11) + 1);
+  if (n === typedShown) return;
+  typedShown = n;
+  lineEl.textContent = chars.slice(0, n).join('');
+  if (n > 0 && n < chars.length) { const c = document.createElement('span'); c.className = 'cursor'; lineEl.appendChild(c); }
+  if (n > 0 && n < chars.length && chars[n - 1].trim()) tone(880, 880, 0.035, 'square', 0.015);
+  if (n === chars.length) { srEl.textContent = MESSAGE.replace('\n', ' '); melody(); replayBtn.hidden = false; }
+}
+
+// ---------- sound (Web Audio, off until the button is pressed) ----------
+let ac = null, soundOn = false;
+function tone(f0, f1, dur, type = 'square', vol = 0.04, delay = 0) {
+  if (!soundOn || !ac) return;
+  const t0 = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t0); o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g).connect(ac.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function boom(vol) {
+  if (!soundOn || !ac) return;
+  const len = Math.floor(ac.sampleRate * 0.45), buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  const src = ac.createBufferSource(), g = ac.createGain(), f = ac.createBiquadFilter();
+  f.type = 'lowpass'; f.frequency.value = 1400; src.buffer = buf; g.gain.value = vol;
+  src.connect(f).connect(g).connect(ac.destination); src.start();
+}
+function chime() { [659, 784, 988, 1319].forEach((f, i) => tone(f, f, 0.18, 'triangle', 0.04, i * 0.09)); }
+function kissSound() { tone(700, 1500, 0.07, 'sine', 0.08); tone(1400, 600, 0.1, 'sine', 0.06, 0.08); }
+function melody() { [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone(f, f, 0.16, 'square', 0.03, i * 0.13)); }
+soundBtn.addEventListener('click', () => {
+  soundOn = !soundOn;
+  if (soundOn && !ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { soundOn = false; } }
+  if (ac && ac.state === 'suspended') ac.resume();
+  soundBtn.textContent = soundOn ? 'Âm thanh: bật' : 'Âm thanh: tắt';
+  soundBtn.setAttribute('aria-pressed', String(soundOn));
+  if (soundOn) tone(660, 990, 0.1, 'square', 0.03);
+});
+
+// ---------- main loop ----------
+let tNow = 0, last = 0;
+function reset() {
+  tNow = 0; rockets = []; parts = []; puffs = []; hearts = [];
+  nextLaunch = T.fwStart; heartDone = kissDone = poofDone = bloomChimed = false; lastHop = -1; typedShown = -1;
+  lineEl.textContent = ''; srEl.textContent = ''; replayBtn.hidden = true;
+}
+function update(dt) {
+  const t = tNow;
+  if (!bloomChimed && t > T.bloomEnd - 0.2) { bloomChimed = true; chime(); }
+  if (t >= nextLaunch && t < T.fwEnd) {
+    launch(); if (Math.random() < 0.3) launch();
+    nextLaunch += rand(0.28, 0.5);
+  }
+  if (!heartDone && t >= T.heart) { heartDone = true; launch(true); }
+  updateFireworks(dt);
+  if (!kissDone && t >= T.kiss) { kissDone = true; kissSound(); }
+  if (!poofDone && t >= T.poof) { poofDone = true; poof(W / 2, H * 0.52, Math.min(W, H) / 13); }
+  updateHearts(dt, t);
+  showText(t);
+}
+function draw() {
+  const t = tNow;
+  ctx.drawImage(bg, 0, 0);
+  for (const s of stars) {
+    const v = Math.sin(t * s.sp + s.ph);
+    if (v < -0.4) continue;
+    rect(s.x, s.y, 1, 1, v > 0.6 ? '#fff4fb' : '#9d8fd0');
+    if (s.big && v > 0.8) { rect(s.x - 1, s.y, 1, 1, '#6f61a8'); rect(s.x + 1, s.y, 1, 1, '#6f61a8'); rect(s.x, s.y - 1, 1, 1, '#6f61a8'); rect(s.x, s.y + 1, 1, 1, '#6f61a8'); }
+  }
+  drawRose(t);
+  drawFireworks();
+  const bn = bunnyState(t);
+  if (bn) drawBunny(bn.face, bn.sx, bn.sy, bn.s, bn.ax, bn.ay);
+  for (const p of puffs) {
+    const u = (t - p.t0) / 0.6; if (u > 1) continue;
+    disc(p.x, p.y, p.r * (1 + u * 1.5), u < 0.5 ? '#e9e3f5' : '#a99fc4');
+  }
+  puffs = puffs.filter(p => t - p.t0 < 0.6);
+  drawKissMark(t);
+  drawFlash(t);
+  drawHearts(t);
+}
+function frame(now) {
+  const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
+  last = now; tNow += dt;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+}
+
+replayBtn.addEventListener('click', () => { reset(); });
+addEventListener('resize', () => { resize(); });
+resize(); reset();
+if (reduceMotion) { tNow = T.text + 20; heartDone = kissDone = poofDone = bloomChimed = true; nextLaunch = Infinity; }   // still frame: open rose and the message
+requestAnimationFrame(frame);
+})();
+</script>
